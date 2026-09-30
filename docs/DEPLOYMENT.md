@@ -467,13 +467,26 @@ gcloud run deploy tally333-extraction-worker \
   --add-cloudsql-instances PROJECT_ID:us-central1:tally333-db \
   --vpc-connector=tally333-connector \
   --set-secrets DATABASE_URL=tally333-db-url:latest,JWT_SECRET_KEY=tally333-jwt:latest,SECRET_KEY=tally333-secret:latest,ANTHROPIC_API_KEY=tally333-anthropic-key:latest \
-  --set-env-vars "^;^SERVICE_ROLE=api;CV_BACKEND=claude;REDIS_URL=redis://10.237.108.179:6379/0;STORAGE_BACKEND=gcs;GCS_BUCKET_NAME=project-x-477317-tally333-forms" \
+  --set-env-vars "^;^SERVICE_ROLE=api;CV_BACKEND=claude;REDIS_URL=redis://10.237.108.179:6379/0;STORAGE_BACKEND=gcs;GCS_BUCKET_NAME=project-x-477317-tally333-forms;TASKS_INVOKER_SERVICE_ACCOUNT=tally333-tasks-invoker@PROJECT_ID.iam.gserviceaccount.com" \
   --memory=2Gi --concurrency=1 --min-instances=0 --max-instances=5
 # --concurrency=1 matches the "one worker holds one Claude call" model —
 # Cloud Tasks' own dispatch concurrency is the real throttle, this just
 # stops Cloud Run from being a second, uncoordinated one. --min-instances=0
 # is fine here (unlike tally333-api/-realtime) — cold starts just mean a
 # task takes a little longer, Cloud Tasks doesn't mind waiting.
+#
+# TASKS_INVOKER_SERVICE_ACCOUNT here is NOT optional, despite this service
+# never sending a Cloud Tasks request itself: internal.py's own OIDC check
+# (app/api/internal.py, _verify_cloud_tasks_oidc) reads it from ITS OWN
+# config to know which principal to accept, and 404s every request outright
+# if it's unset — indistinguishable from a route that doesn't exist, and
+# indistinguishable in the Cloud Run request logs from the platform-level
+# IAM invoker check below succeeding or failing. Leaving this out here
+# (while setting it correctly on tally333-api below) is exactly what
+# silently broke every real submission for a while — see incident notes for
+# 2026-09-30. If uploads seem to hang in "processing" forever, or resolve
+# only after a long delay from Cloud Tasks retrying a 404, check this var
+# is actually set on the WORKER, not just the API service.
 
 gcloud run services add-iam-policy-binding tally333-extraction-worker \
   --region=us-central1 \
