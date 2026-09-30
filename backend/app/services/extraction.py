@@ -29,6 +29,19 @@ def process_extraction(submission_id: str) -> None:
     local_path, cleanup = _local_path_for(submission)
     try:
         _run_extraction(submission, local_path)
+    except Exception:
+        # Anything unexpected here (a bad image, a backend outage, a bug)
+        # used to leave the submission stuck at "processing" forever — the
+        # frontend polls a status that could never change again, with no
+        # error surfaced anywhere. Fail loudly instead: roll back whatever
+        # partial work _run_extraction left in the session, then mark the
+        # submission failed so the agent can retake and resubmit.
+        current_app.logger.exception("Extraction failed for submission %s", submission_id)
+        db.session.rollback()
+        submission = db.session.get(FormSubmission, submission_id)
+        submission.status = "extraction_failed"
+        submission.warnings = ["Something went wrong while reading this form. Please retake the photo and try again."]
+        db.session.commit()
     finally:
         if cleanup:
             try:
